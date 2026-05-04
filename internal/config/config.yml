@@ -1,0 +1,21 @@
+http:
+  addr: ":8080"
+
+mysql:
+  user: "test"
+  password: "532948"
+  host: "127.0.0.1"
+  port: "3306"
+  database: "webhook_platform"
+  params:
+    parseTime: "true"
+
+timeouts:
+  request: "5s"
+  delivery: "5s"
+  shutdown: "10s"
+
+worker:
+  count: 4
+  queue_size: 16
+  poll_interval: "1s"

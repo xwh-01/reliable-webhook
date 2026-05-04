@@ -1,0 +1,15 @@
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+*.log
+*.tmp
+
+.idea
+.vscode
+
+bin
+dist
+coverage.out
