@@ -15,7 +15,7 @@ func dsnFromEnv() string {
 	if v := os.Getenv("TEST_MYSQL_DSN"); v != "" {
 		return v
 	}
-	return "root:532948@tcp(127.0.0.1:3306)/webhook_platform?parseTime=true&loc=Local"
+	return "webhook:webhook_pass@tcp(127.0.0.1:3306)/webhook_platform?parseTime=true&loc=Local"
 }
 
 func NewTestDB(t *testing.T) *sql.DB {
@@ -28,6 +28,29 @@ func NewTestDB(t *testing.T) *sql.DB {
 	if err := db.Ping(); err != nil {
 		t.Skipf("mysql not available, skipping integration test: %v", err)
 	}
+
+	lockDB, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatalf("open mysql lock connection: %v", err)
+	}
+	if err := lockDB.Ping(); err != nil {
+		lockDB.Close()
+		t.Fatalf("ping mysql lock connection: %v", err)
+	}
+	var locked int
+	if err := lockDB.QueryRow("SELECT GET_LOCK('reliable_webhook_integration_tests', 30)").Scan(&locked); err != nil {
+		lockDB.Close()
+		t.Fatalf("acquire mysql test lock: %v", err)
+	}
+	if locked != 1 {
+		lockDB.Close()
+		t.Fatalf("acquire mysql test lock: timed out")
+	}
+	t.Cleanup(func() {
+		_, _ = lockDB.Exec("SELECT RELEASE_LOCK('reliable_webhook_integration_tests')")
+		_ = lockDB.Close()
+	})
+
 	return db
 }
 

@@ -53,7 +53,7 @@ type ClaimedDelivery struct {
 //   2. status='running' 且 locked_until 已过期（上一个 worker 挂了/卡死了）
 //
 // 并发安全：
-//   SELECT ... FOR UPDATE 锁定扫描到的行。
+//   SELECT ... FOR UPDATE SKIP LOCKED 锁定扫描到的行，跳过已被其他事务锁住的行。
 //   同事务内 UPDATE status='running' + locked_until，防止其他 worker 重复认领。
 //   locked_until = now + claimLease，租约到期前此任务独占。
 func (r *DeliveryRepository) ClaimOneReadyPending(ctx context.Context, lockedUntil time.Time) (*ClaimedDelivery, error) {
@@ -83,7 +83,7 @@ func (r *DeliveryRepository) ClaimOneReadyPending(ctx context.Context, lockedUnt
 		)
 		ORDER BY d.id ASC
 		LIMIT 1
-		FOR UPDATE
+		FOR UPDATE SKIP LOCKED
 	`)
 
 	var d ClaimedDelivery

@@ -5,7 +5,7 @@
 //
 // MySQL DSN 支持两种配置方式：
 //   - 直接设置 mysql.dsn（完整连接串）
-//   - 分开设置 mysql.user / password / host / port / database（内部用 go-sql-driver 拼装）
+//   - 分开设置 mysql.user / mysql.password / mysql.host / mysql.port / mysql.database（内部用 go-sql-driver 拼装）
 package config
 
 import (
@@ -38,13 +38,13 @@ type fileConfig struct {
 		Addr string `yaml:"addr"`
 	} `yaml:"http"`
 	MySQL struct {
-		DSN      string            `yaml:"dsn"`      // 完整 DSN，设置后忽略其他字段
+		DSN      string            `yaml:"dsn"` // 完整 DSN，设置后忽略其他字段
 		User     string            `yaml:"user"`
 		Password string            `yaml:"password"`
 		Host     string            `yaml:"host"`
 		Port     string            `yaml:"port"`
 		Database string            `yaml:"database"`
-		Params   map[string]string `yaml:"params"`   // 额外连接参数，如 parseTime=true
+		Params   map[string]string `yaml:"params"` // 额外连接参数，如 parseTime=true
 	} `yaml:"mysql"`
 	Timeouts struct {
 		Request  string `yaml:"request"`
@@ -158,9 +158,9 @@ func mysqlDSN(cfg fileConfig) string {
 }
 
 // loadConfigFile 按优先级读取 YAML 配置文件：
-//   1. CONFIG_FILE 环境变量指定的路径（不存在则报错）
-//   2. 当前目录 config.yml（不存在则尝试备选）
-//   3. internal/config/config.yml（备选，不存在则用默认值）
+//  1. CONFIG_FILE 环境变量指定的路径（不存在则报错）
+//  2. 当前目录 config.yml
+//  3. 未找到配置文件时保留默认值，后续仍可由环境变量覆盖
 func loadConfigFile(cfg *fileConfig) error {
 	path := os.Getenv("CONFIG_FILE")
 	required := path != "" // 如果显式指定了 CONFIG_FILE，文件必须存在
@@ -170,20 +170,10 @@ func loadConfigFile(cfg *fileConfig) error {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// config.yml 不存在且没指定 CONFIG_FILE → 尝试备选路径
 		if errors.Is(err, os.ErrNotExist) && !required {
-			data, err = os.ReadFile("internal/config/config.yml")
-			if errors.Is(err, os.ErrNotExist) {
-				// 两个路径都没有 → 全部使用默认值
-				return nil
-			}
-			if err != nil {
-				return fmt.Errorf("read config file internal/config/config.yml: %w", err)
-			}
-			path = "internal/config/config.yml"
-		} else {
-			return fmt.Errorf("read config file %s: %w", path, err)
+			return nil
 		}
+		return fmt.Errorf("read config file %s: %w", path, err)
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {

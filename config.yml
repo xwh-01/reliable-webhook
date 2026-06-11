@@ -2,8 +2,8 @@ http:
   addr: ":8080"
 
 mysql:
-  user: "root"
-  password: "532948"
+  user: "webhook"
+  password: "webhook_pass"
   host: "127.0.0.1"
   port: "3306"
   database: "webhook_platform"

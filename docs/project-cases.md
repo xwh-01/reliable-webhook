@@ -120,8 +120,6 @@ FOR UPDATE
 - **租约自动续期**：每次 `ClaimOneReadyPending()` 时传入 `time.Now().Add(claimLease)`，如果本次投递成功会 `locked_until = NULL`；如果调度重试则连 `locked_until` 一起清除。
 - **优雅关闭**：`DeliveryPool.Start()` 中通过 `context.WithCancel` 传播关闭信号，`select` 监听 `<-ctx.Done()`，关闭 channel 后 `wg.Wait()` 等待所有 worker 完成当前任务再退出。
 
-<<<<<<< HEAD
-=======
 ### 能体现的能力
 
 - 能考虑进程异常退出，不只考虑正常流程。
@@ -167,4 +165,3 @@ FOR UPDATE
 | 审计记录 | `delivery_repository.go:139-156` | `delivery_attempts` 表记录每次投递 |
 | 人工重放 | `delivery_repository.go:158-224` | `FOR UPDATE` 防并发 + `replay_of_delivery_id` 链路追踪 |
 | Prometheus | `observability/metrics.go:14-69` | 6 个指标：CounterVec × 3 + HistogramVec + Gauge × 2 |
->>>>>>> 1cf3d41 (update reliable webhook service)
