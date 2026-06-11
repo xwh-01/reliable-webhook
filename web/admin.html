@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reliable Webhook Admin</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --text: #172033;
+        --muted: #5d677a;
+        --border: #d9e0ea;
+        --primary: #1769e0;
+        --danger: #b42318;
+        --success: #027a48;
+        --warning: #9a6700;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, "Microsoft YaHei", sans-serif;
+        line-height: 1.5;
+      }
+
+      main {
+        width: min(1200px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 24px 0;
+      }
+
+      h1 {
+        margin: 0 0 4px;
+        font-size: 24px;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin: 16px 0;
+      }
+
+      select, button {
+        min-height: 36px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0 12px;
+        font: inherit;
+        background: var(--panel);
+        cursor: pointer;
+      }
+
+      button.primary {
+        color: #fff;
+        background: var(--primary);
+        border-color: var(--primary);
+        font-weight: 600;
+      }
+
+      button.danger {
+        color: #fff;
+        background: var(--danger);
+        border-color: var(--danger);
+        font-size: 12px;
+        min-height: 28px;
+        padding: 0 10px;
+      }
+
+      button:hover { filter: brightness(0.94); }
+      button:disabled { opacity: 0.55; cursor: wait; }
+
+      label { font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        font-size: 13px;
+      }
+
+      thead { background: #eef2f7; }
+      th { text-align: left; padding: 10px 12px; font-weight: 600; white-space: nowrap; color: var(--muted); }
+      td { padding: 10px 12px; border-top: 1px solid var(--border); vertical-align: middle; }
+      td.url {
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      td.err {
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--danger);
+        font-size: 12px;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+      .badge-dead { background: #fce4e4; color: var(--danger); }
+      .badge-succeeded { background: #d9f3e5; color: var(--success); }
+      .badge-pending { background: #fef3c7; color: var(--warning); }
+      .badge-running { background: #dbeafe; color: var(--primary); }
+
+      .empty {
+        text-align: center;
+        padding: 48px 0;
+        color: var(--muted);
+      }
+
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 20px;
+        border-radius: 8px;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        opacity: 0;
+        transition: opacity 0.25s;
+        z-index: 100;
+      }
+      .toast-show { opacity: 1; }
+      .toast-ok { background: var(--success); }
+      .toast-err { background: var(--danger); }
+
+      pre {
+        margin: 16px 0 0;
+        padding: 12px;
+        background: #101828;
+        color: #ecfdf3;
+        border-radius: 8px;
+        font-size: 12px;
+        max-height: 200px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Delivery Admin</h1>
+        <p style="color:var(--muted);margin:0;">查看投递列表 / 重放死信</p>
+      </header>
+
+      <div class="toolbar">
+        <select id="statusFilter">
+          <option value="dead">dead</option>
+          <option value="succeeded">succeeded</option>
+          <option value="pending">pending</option>
+          <option value="running">running</option>
+        </select>
+        <button class="primary" id="refreshBtn">刷新</button>
+        <label><input type="checkbox" id="autoRefresh" /> 自动刷新 (5s)</label>
+        <span id="countLabel" style="color:var(--muted);font-size:13px;"></span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Delivery ID</th>
+            <th>Event ID</th>
+            <th>Event Key</th>
+            <th>Target URL</th>
+            <th>Status</th>
+            <th>Last Error</th>
+            <th>Attempts</th>
+            <th>Created</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div id="emptyMsg" class="empty" style="display:none;">暂无数据</div>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const tbody = document.getElementById("tbody");
+      const emptyMsg = document.getElementById("emptyMsg");
+      const toast = document.getElementById("toast");
+      const countLabel = document.getElementById("countLabel");
+      const statusFilter = document.getElementById("statusFilter");
+      const refreshBtn = document.getElementById("refreshBtn");
+      const autoCb = document.getElementById("autoRefresh");
+
+      let timer = null;
+
+      refreshBtn.addEventListener("click", load);
+      statusFilter.addEventListener("change", load);
+      autoCb.addEventListener("change", () => {
+        if (autoCb.checked) {
+          timer = setInterval(load, 5000);
+        } else {
+          clearInterval(timer);
+          timer = null;
+        }
+      });
+
+      load();
+
+      async function load() {
+        refreshBtn.disabled = true;
+        const status = statusFilter.value;
+        try {
+          const resp = await fetch("/admin/deliveries?status=" + encodeURIComponent(status));
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "HTTP " + resp.status);
+          render(data.deliveries || []);
+        } catch (e) {
+          showToast("加载失败: " + e.message, false);
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+
+      function render(list) {
+        countLabel.textContent = "共 " + list.length + " 条";
+        if (list.length === 0) {
+          tbody.innerHTML = "";
+          emptyMsg.style.display = "";
+          return;
+        }
+        emptyMsg.style.display = "none";
+        tbody.innerHTML = list.map(row).join("");
+      }
+
+      function row(d) {
+        const badge = '<span class="badge badge-' + d.status + '">' + d.status + "</span>";
+        const err = d.last_error ? '<span title="' + esc(d.last_error) + '">' + esc(d.last_error) + "</span>" : "-";
+        const time = d.created_at ? d.created_at.replace("T", " ").substring(0, 19) : "";
+        const isDead = d.status === "dead";
+        const btn = isDead
+          ? '<button class="danger" onclick="replay(' + d.event_id + ',this)">Replay</button>'
+          : "-";
+        return (
+          "<tr>" +
+          "<td>" + d.delivery_id + "</td>" +
+          "<td>" + d.event_id + "</td>" +
+          "<td>" + esc(d.event_key) + "</td>" +
+          '<td class="url" title="' + esc(d.target_url) + '">' + esc(d.target_url) + "</td>" +
+          "<td>" + badge + "</td>" +
+          '<td class="err">' + err + "</td>" +
+          "<td>" + d.attempt_count + "/" + d.max_attempts + "</td>" +
+          "<td>" + time + "</td>" +
+          "<td>" + btn + "</td>" +
+          "</tr>"
+        );
+      }
+
+      async function replay(eventId, btn) {
+        btn.disabled = true;
+        btn.textContent = "...";
+        try {
+          const resp = await fetch("/events/" + eventId + "/replay", { method: "POST" });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "HTTP " + resp.status);
+          showToast("Replay OK — delivery_id=" + data.delivery_id, true);
+          setTimeout(load, 800);
+        } catch (e) {
+          showToast("Replay failed: " + e.message, false);
+          btn.disabled = false;
+          btn.textContent = "Replay";
+        }
+      }
+
+      function esc(s) {
+        if (!s) return "";
+        return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      }
+
+      function showToast(msg, ok) {
+        toast.textContent = msg;
+        toast.className = "toast toast-show " + (ok ? "toast-ok" : "toast-err");
+        setTimeout(() => { toast.className = "toast"; }, 3000);
+      }
+    </script>
+  </body>
+</html>

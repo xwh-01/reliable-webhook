@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reliable Webhook Demo Console</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --text: #172033;
+        --muted: #5d677a;
+        --border: #d9e0ea;
+        --primary: #1769e0;
+        --danger: #b42318;
+        --warning: #9a6700;
+        --success: #027a48;
+        --code: #101828;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, "Microsoft YaHei",
+          sans-serif;
+        line-height: 1.5;
+      }
+
+      main {
+        width: min(960px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      section {
+        margin-top: 20px;
+        padding: 20px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 18px;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      button {
+        min-height: 40px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 0 14px;
+        color: #ffffff;
+        background: var(--primary);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        filter: brightness(0.96);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      .danger {
+        background: var(--danger);
+      }
+
+      .warning {
+        background: var(--warning);
+      }
+
+      .form-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      input {
+        width: 100%;
+        min-height: 40px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0 12px;
+        color: var(--text);
+        font: inherit;
+        background: #ffffff;
+      }
+
+      pre {
+        min-height: 220px;
+        max-height: 480px;
+        overflow: auto;
+        margin: 16px 0 0;
+        padding: 16px;
+        border-radius: 8px;
+        background: var(--code);
+        color: #ecfdf3;
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .note-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+      }
+
+      .status-line {
+        margin-top: 12px;
+        min-height: 24px;
+        color: var(--muted);
+      }
+
+      code {
+        color: var(--text);
+        background: #eef2f7;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+
+      @media (max-width: 640px) {
+        main {
+          width: min(100% - 20px, 960px);
+          padding: 20px 0;
+        }
+
+        .form-row {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Reliable Webhook Demo Console</h1>
+        <p>本地演示面板：创建投递事件并查看事件状态。</p>
+      </header>
+
+      <section>
+        <h2>创建事件</h2>
+        <div class="button-row">
+          <button type="button" data-mode="success">创建成功投递事件</button>
+          <button type="button" class="danger" data-mode="fail">创建失败投递事件</button>
+          <button type="button" class="warning" data-mode="slow">创建超时投递事件</button>
+        </div>
+        <div id="createStatus" class="status-line"></div>
+      </section>
+
+      <section>
+        <h2>刷新事件状态</h2>
+        <div class="form-row">
+          <input
+            id="eventKeyInput"
+            type="text"
+            autocomplete="off"
+            placeholder="输入 event_key，例如 demo_success_1710000000000"
+          />
+          <button type="button" id="refreshButton">刷新事件状态</button>
+        </div>
+        <pre id="result">{}</pre>
+      </section>
+
+      <section>
+        <h2>预期结果</h2>
+        <ul class="note-list">
+          <li>success 场景预期 <code>succeeded</code></li>
+          <li>fail 场景预期 <code>pending</code> / <code>retry</code> / <code>dead</code></li>
+          <li>slow 场景预期 <code>timeout</code> / <code>retry</code></li>
+        </ul>
+      </section>
+    </main>
+
+    <script>
+      const API_BASE_URL = "http://127.0.0.1:9000";
+      const TARGET_URL = "http://127.0.0.1:9000/webhook";
+      const eventKeyInput = document.querySelector("#eventKeyInput");
+      const result = document.querySelector("#result");
+      const createStatus = document.querySelector("#createStatus");
+      const refreshButton = document.querySelector("#refreshButton");
+      const eventIdByKey = loadEventMap();
+
+      document.querySelectorAll("[data-mode]").forEach((button) => {
+        button.addEventListener("click", () => createEvent(button.dataset.mode));
+      });
+
+      refreshButton.addEventListener("click", refreshEventStatus);
+
+      function loadEventMap() {
+        try {
+          return JSON.parse(localStorage.getItem("demoEventIdByKey") || "{}");
+        } catch (error) {
+          return {};
+        }
+      }
+
+      function saveEventMap() {
+        localStorage.setItem("demoEventIdByKey", JSON.stringify(eventIdByKey));
+      }
+
+      function createEventKey(mode) {
+        return `demo_${mode}_${Date.now()}`;
+      }
+
+      async function createEvent(mode) {
+        setBusy(true);
+        const eventKey = createEventKey(mode);
+        const requestBody = {
+          event_key: eventKey,
+          event_type: "order.paid",
+          payload: JSON.stringify({ order_id: 10001, amount: 99 }),
+          target_url: TARGET_URL,
+        };
+
+        try {
+          createStatus.textContent = `正在创建 ${eventKey} ...`;
+          const response = await fetch(`${API_BASE_URL}/events`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody),
+          });
+          const data = await readJson(response);
+
+          if (!response.ok) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+          }
+
+          if (data.event_id) {
+            eventIdByKey[eventKey] = data.event_id;
+            saveEventMap();
+          }
+
+          eventKeyInput.value = eventKey;
+          createStatus.textContent = `已创建 ${eventKey}`;
+          showJson({
+            request: requestBody,
+            response: data,
+            next_step: "稍等 1-2 秒后点击刷新事件状态",
+          });
+        } catch (error) {
+          createStatus.textContent = "创建失败";
+          showJson(formatError(error));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function refreshEventStatus() {
+        const eventKey = eventKeyInput.value.trim();
+        if (!eventKey) {
+          showJson({ error: "请先输入 event_key，或点击上方按钮创建事件。" });
+          return;
+        }
+
+        const eventId = eventIdByKey[eventKey] || eventKey;
+        setBusy(true);
+
+        try {
+          const response = await fetch(`${API_BASE_URL}/events/${encodeURIComponent(eventId)}`);
+          const data = await readJson(response);
+
+          if (!response.ok) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+          }
+
+          showJson({
+            event_key: eventKey,
+            queried_by: eventId === eventKey ? "input" : "event_id mapped from local demo state",
+            result: data,
+          });
+        } catch (error) {
+          showJson(formatError(error));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function readJson(response) {
+        const text = await response.text();
+        if (!text) {
+          return {};
+        }
+
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return { raw: text };
+        }
+      }
+
+      function formatError(error) {
+        return {
+          error: error.message,
+          hint:
+            "请确认主服务运行在 http://127.0.0.1:8080，webhook_receiver.py 运行在 127.0.0.1:9000。demo 页面会通过 receiver 代理访问主服务。",
+        };
+      }
+
+      function showJson(value) {
+        result.textContent = JSON.stringify(value, null, 2);
+      }
+
+      function setBusy(isBusy) {
+        document.querySelectorAll("button").forEach((button) => {
+          button.disabled = isBusy;
+        });
+      }
+    </script>
+  </body>
+</html>

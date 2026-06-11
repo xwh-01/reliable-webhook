@@ -1,13 +1,31 @@
+// Prometheus 指标定义
+//
+// 6 项指标覆盖创建、投递、最终状态三个阶段的观测：
+//   Counter  — 只增不减（累计投递次数、事件数）
+//   Gauge    — 可增可减（当前正在投递的数量、队列深度）
+//   Histogram— 分布统计（投递耗时分布）
 package observability
 
 import "github.com/prometheus/client_golang/prometheus"
 
 type Metrics struct {
+	// 事件接收统计，按 result 分类：created / duplicate / invalid / error
 	EventsReceivedTotal     *prometheus.CounterVec
+
+	// 投递尝试统计，按 outcome（succeeded/failed）+ status_code 分类
 	DeliveryAttemptsTotal   *prometheus.CounterVec
+
+	// 投递最终状态统计：
+	//   state 取值：succeeded / dead_non_retryable / dead_max_attempts / retry_scheduled
 	DeliveryFinalStateTotal *prometheus.CounterVec
+
+	// 单次投递耗时分布，按 outcome 分类
 	DeliveryDurationSeconds *prometheus.HistogramVec
+
+	// 当前正在执行的投递数量
 	DeliveriesInFlight      prometheus.Gauge
+
+	// 内存队列中等待处理的投递数量
 	DeliveryQueueDepth      prometheus.Gauge
 }
 

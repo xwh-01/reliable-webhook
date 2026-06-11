@@ -2,7 +2,7 @@ http:
   addr: ":8080"
 
 mysql:
-  user: "test"
+  user: "root"
   password: "532948"
   host: "127.0.0.1"
   port: "3306"

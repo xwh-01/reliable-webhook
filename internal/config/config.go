@@ -1,3 +1,11 @@
+// 配置加载：
+//
+// 加载顺序：默认值 → config.yml（或 CONFIG_FILE 环境变量指定路径） → 环境变量覆盖
+// 环境变量优先级最高，支持 Docker / K8s 部署时无需修改配置文件。
+//
+// MySQL DSN 支持两种配置方式：
+//   - 直接设置 mysql.dsn（完整连接串）
+//   - 分开设置 mysql.user / password / host / port / database（内部用 go-sql-driver 拼装）
 package config
 
 import (
@@ -11,30 +19,32 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
+// Config 是对外暴露的不可变配置，所有字段已解析为 Go 类型
 type Config struct {
 	HTTPAddr        string
-	MySQLDSN        string
-	RequestTimeout  time.Duration
-	DeliveryTimeout time.Duration
-	ShutdownTimeout time.Duration
+	MySQLDSN        string        // 完整 MySQL 连接串（内部拼装或直接读取 dsn）
+	RequestTimeout  time.Duration // 单个 HTTP 请求的最大处理时间
+	DeliveryTimeout time.Duration // 单次 HTTP 投递的超时
+	ShutdownTimeout time.Duration // 优雅关闭的总等待时间
 
-	WorkerCount  int
-	QueueSize    int
-	PollInterval time.Duration
+	WorkerCount  int           // Worker goroutine 数量
+	QueueSize    int           // 内存 channel 缓冲大小
+	PollInterval time.Duration // Dispatcher 轮询间隔
 }
 
+// fileConfig 是 YAML 文件的原始结构，所有值都是字符串或原始类型
 type fileConfig struct {
 	HTTP struct {
 		Addr string `yaml:"addr"`
 	} `yaml:"http"`
 	MySQL struct {
-		DSN      string            `yaml:"dsn"`
+		DSN      string            `yaml:"dsn"`      // 完整 DSN，设置后忽略其他字段
 		User     string            `yaml:"user"`
 		Password string            `yaml:"password"`
 		Host     string            `yaml:"host"`
 		Port     string            `yaml:"port"`
 		Database string            `yaml:"database"`
-		Params   map[string]string `yaml:"params"`
+		Params   map[string]string `yaml:"params"`   // 额外连接参数，如 parseTime=true
 	} `yaml:"mysql"`
 	Timeouts struct {
 		Request  string `yaml:"request"`
@@ -48,6 +58,7 @@ type fileConfig struct {
 	} `yaml:"worker"`
 }
 
+// Load 返回解析完成的 Config，加载优先级：默认值 < YAML 文件 < 环境变量
 func Load() (*Config, error) {
 	raw := defaultFileConfig()
 
@@ -59,6 +70,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// 将字符串解析为 time.Duration
 	requestTimeout, err := parseDurationValue("request timeout", raw.Timeouts.Request)
 	if err != nil {
 		return nil, err
@@ -90,6 +102,7 @@ func Load() (*Config, error) {
 		PollInterval:    pollInterval,
 	}
 
+	// 启动时校验：缺少关键配置直接报错
 	if cfg.MySQLDSN == "" {
 		return nil, fmt.Errorf("mysql config is required: set mysql.dsn or mysql.user/mysql.password/mysql.database in config.yml")
 	}
@@ -103,6 +116,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// defaultFileConfig 设置所有字段的默认值，后续被 YAML 和环境变量覆盖
 func defaultFileConfig() fileConfig {
 	var cfg fileConfig
 	cfg.HTTP.Addr = ":8080"
@@ -118,6 +132,8 @@ func defaultFileConfig() fileConfig {
 	return cfg
 }
 
+// mysqlDSN 返回 MySQL 连接字符串
+// 优先用 dsn 字段；否则用 user/password/host/port/database 拼装
 func mysqlDSN(cfg fileConfig) string {
 	if cfg.MySQL.DSN != "" {
 		return cfg.MySQL.DSN
@@ -141,18 +157,24 @@ func mysqlDSN(cfg fileConfig) string {
 	return mysqlCfg.FormatDSN()
 }
 
+// loadConfigFile 按优先级读取 YAML 配置文件：
+//   1. CONFIG_FILE 环境变量指定的路径（不存在则报错）
+//   2. 当前目录 config.yml（不存在则尝试备选）
+//   3. internal/config/config.yml（备选，不存在则用默认值）
 func loadConfigFile(cfg *fileConfig) error {
 	path := os.Getenv("CONFIG_FILE")
-	required := path != ""
+	required := path != "" // 如果显式指定了 CONFIG_FILE，文件必须存在
 	if path == "" {
 		path = "config.yml"
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
+		// config.yml 不存在且没指定 CONFIG_FILE → 尝试备选路径
 		if errors.Is(err, os.ErrNotExist) && !required {
 			data, err = os.ReadFile("internal/config/config.yml")
 			if errors.Is(err, os.ErrNotExist) {
+				// 两个路径都没有 → 全部使用默认值
 				return nil
 			}
 			if err != nil {
@@ -171,6 +193,8 @@ func loadConfigFile(cfg *fileConfig) error {
 	return nil
 }
 
+// applyEnvOverrides 环境变量覆盖 YAML 配置中的对应字段
+// 环境变量优先级最高，适用于 Docker / K8s 部署场景
 func applyEnvOverrides(cfg *fileConfig) error {
 	if v := os.Getenv("HTTP_ADDR"); v != "" {
 		cfg.HTTP.Addr = v

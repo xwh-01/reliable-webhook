@@ -1,3 +1,9 @@
+// Event 表的数据操作
+//
+// 核心方法：
+//   CreateEventWithDelivery — 事务内同时写入 events + deliveries，保证一致性
+//   GetEventIDByKey        — 按 event_key 查 id，用于幂等判断
+//   GetEventDetailByID     — 按 id 查事件 + 最新一条 delivery
 package repository
 
 import (
@@ -10,6 +16,7 @@ import (
 	"reliable-webhook-platform/internal/model"
 )
 
+// ErrEventKeyConflict 事件重复提交（event_key 唯一索引冲突）
 var ErrEventKeyConflict = errors.New("event_key already exists")
 
 type EventRepository struct {
@@ -27,12 +34,21 @@ type CreateEventParams struct {
 	TargetURL string
 }
 
+// CreateEventWithDelivery 在同一个事务中创建 event 和 delivery
+//
+// 原子性保证：
+//   任意一步失败 → Rollback，不会出现"事件收了但没有投递任务"的情况。
+//
+// 幂等保证：
+//   events 表 event_key 有唯一索引 uk_event_key。
+//   INSERT 冲突 → MySQL 返回 1062 → 返回 ErrEventKeyConflict。
+//   service 层收到这个错误后回查已有 id，返回给调用方。
 func (r *EventRepository) CreateEventWithDelivery(ctx context.Context, p CreateEventParams) (int64, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.BeginTx(ctx, nil) // nil = 使用默认隔离级别（REPEATABLE-READ）
 	if err != nil {
 		return 0, fmt.Errorf("begin tx failed: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() // 安全网：未 commit 的事务自动回滚
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO events (event_key, event_type, payload, status)
@@ -40,6 +56,8 @@ func (r *EventRepository) CreateEventWithDelivery(ctx context.Context, p CreateE
 	`, p.EventKey, p.EventType, p.Payload, "accepted")
 	if err != nil {
 		var mysqlErr *mysqlDriver.MySQLError
+		// MySQL 错误码 1062 = Duplicate entry（唯一索引冲突）
+		// 靠 event_key 唯一索引做幂等判断，不需要应用层先查再插
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 			return 0, ErrEventKeyConflict
 		}
@@ -51,6 +69,8 @@ func (r *EventRepository) CreateEventWithDelivery(ctx context.Context, p CreateE
 		return 0, fmt.Errorf("get event id failed: %w", err)
 	}
 
+	// 同事务中创建 delivery
+	// next_retry_at = NOW() 让 dispatcher 立即可以捡走
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO deliveries (
 			event_id, target_url, status, attempt_count, max_attempts, next_retry_at
@@ -68,6 +88,8 @@ func (r *EventRepository) CreateEventWithDelivery(ctx context.Context, p CreateE
 	return eventID, nil
 }
 
+// GetEventIDByKey 按 event_key 查 events.id
+// 用于幂等场景：CreateEvent 遇到 key 冲突后回查已有 id
 func (r *EventRepository) GetEventIDByKey(ctx context.Context, eventKey string) (int64, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id
@@ -79,13 +101,18 @@ func (r *EventRepository) GetEventIDByKey(ctx context.Context, eventKey string) 
 	var eventID int64
 	if err := row.Scan(&eventID); err != nil {
 		if err == sql.ErrNoRows {
-			return 0, nil
+			return 0, nil // 没找到不算错误
 		}
 		return 0, fmt.Errorf("get event by key failed: %w", err)
 	}
 	return eventID, nil
 }
 
+// GetEventDetailByID 查询事件详情，带最新一条 delivery
+//
+// LEFT JOIN 子查询 (SELECT d2.id FROM deliveries d2 WHERE ... ORDER BY d2.id DESC LIMIT 1)
+// 拿到最新 delivery 后 JOIN 主表。
+// 这样做的好处：event 即使没有 delivery（边界情况），event 行依然返回，delivery 字段为 NULL。
 func (r *EventRepository) GetEventDetailByID(ctx context.Context, id int64) (*model.EventDetail, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT
@@ -106,8 +133,8 @@ func (r *EventRepository) GetEventDetailByID(ctx context.Context, id int64) (*mo
 	`, id)
 
 	var detail model.EventDetail
-	var lastError sql.NullString
-	var replayOfDeliveryID sql.NullInt64
+	var lastError sql.NullString     // last_error 可为 NULL
+	var replayOfDeliveryID sql.NullInt64 // replay_of_delivery_id 可为 NULL
 
 	err := row.Scan(
 		&detail.Event.ID,
@@ -129,11 +156,12 @@ func (r *EventRepository) GetEventDetailByID(ctx context.Context, id int64) (*mo
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return nil, nil // 没找到不算错误
 		}
 		return nil, fmt.Errorf("query event detail failed: %w", err)
 	}
 
+	// 处理可为 NULL 的字段
 	if lastError.Valid {
 		detail.Delivery.LastError = &lastError.String
 	}
